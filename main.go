@@ -12,11 +12,12 @@ import (
 	"golang.org/x/term"
 )
 
-const Version = "v0.1.0"
+const Version = "v0.1.1"
 
 func main() {
 	args := utils.GetArgs()
 	fs := utils.NewFS(&args.Input)
+	fmt.Printf("Args: %+v\n", args)
 	if args.ProjectBuild {
 		BuildProject(args)
 		return

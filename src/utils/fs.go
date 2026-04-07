@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -26,7 +27,7 @@ func NewFS(basePath *[]string) FS {
 		panic(err)
 	}
 	if basePath != nil {
-		bp = strings.Join(*basePath, slash)
+		bp = bp + strings.Join(*basePath, slash)
 	}
 	fs := FS{
 		isWin:    isWin,
@@ -34,7 +35,8 @@ func NewFS(basePath *[]string) FS {
 		BasePath: bp,
 		baseLen:  len(strings.Split(bp, slash)),
 	}
-	fs.mkdirIfNotExists(fs.Path(""), false)
+	fmt.Println("PWD:", fs.Path())
+	fs.mkdirIfNotExists(fs.Path(), false)
 	return fs
 }
 
