@@ -15,16 +15,33 @@ import (
 const Version = "v0.1.1"
 
 func main() {
+	err := run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			switch v := r.(type) {
+			case error:
+				err = fmt.Errorf("operation failed: %w", v)
+			default:
+				err = fmt.Errorf("operation failed: %v", v)
+			}
+		}
+	}()
+
 	args := utils.GetArgs()
 	fs := utils.NewFS(&args.Input)
-	fmt.Printf("Args: %+v\n", args)
 	if args.ProjectBuild {
-		BuildProject(args)
-		return
+		return BuildProject(args)
 	}
 	filesRes := fs.ListFiles()
 	if filesRes.Error != nil {
-		panic(filesRes.Error)
+		return fmt.Errorf("failed to list input files: %w", filesRes.Error)
 	}
 	files := filesRes.Value
 	if args.Lock {
@@ -33,7 +50,7 @@ func main() {
 			pass, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Println()
 			if err != nil {
-				panic(err)
+				return fmt.Errorf("failed to read password: %w", err)
 			}
 			args.Pass = string(pass)
 		}
@@ -41,6 +58,11 @@ func main() {
 			file := files[i]
 			fmt.Printf("Encrypting file %s...", file)
 			filePath := strings.Split(file, "/")
+			modeRes := fs.FileMode(filePath...)
+			if modeRes.Error != nil {
+				fmt.Printf("[ERROR] reading mode for file %s: %s\n", file, modeRes.Error)
+				continue
+			}
 			fileRes := fs.Read(filePath...)
 			if fileRes.Error != nil {
 				fmt.Printf("[ERROR] reading file %s: %s\n", file, fileRes.Error)
@@ -52,17 +74,21 @@ func main() {
 				fmt.Printf("[ERROR] encrypting file %s: %s\n", file, err)
 				continue
 			}
-			fs.Write(encrypted, filePath...)
+			writeRes := fs.WriteWithMode(encrypted, modeRes.Value, filePath...)
+			if writeRes.Error != nil {
+				fmt.Printf("[ERROR] writing file %s: %s\n", file, writeRes.Error)
+				continue
+			}
 			fmt.Printf("Done\n")
 		}
-		return
+		return nil
 	} else {
 		if args.Pass == "" {
 			fmt.Print("Enter password: ")
 			pass, err := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Println()
 			if err != nil {
-				panic(err)
+				return fmt.Errorf("failed to read password: %w", err)
 			}
 			args.Pass = string(pass)
 		}
@@ -70,6 +96,11 @@ func main() {
 			file := files[i]
 			fmt.Printf("Decrypting file %s...", file)
 			filePath := strings.Split(file, "/")
+			modeRes := fs.FileMode(filePath...)
+			if modeRes.Error != nil {
+				fmt.Printf("[ERROR] reading mode for file %s: %s\n", file, modeRes.Error)
+				continue
+			}
 			fileRes := fs.Read(filePath...)
 			if fileRes.Error != nil {
 				fmt.Printf("[ERROR] reading file %s: %s\n", file, fileRes.Error)
@@ -81,10 +112,14 @@ func main() {
 				fmt.Printf("[ERROR] decrypting file %s: %s\n", file, err)
 				continue
 			}
-			fs.Write(decrypted, filePath...)
+			writeRes := fs.WriteWithMode(decrypted, modeRes.Value, filePath...)
+			if writeRes.Error != nil {
+				fmt.Printf("[ERROR] writing file %s: %s\n", file, writeRes.Error)
+				continue
+			}
 			fmt.Printf("Done\n")
 		}
-		return
+		return nil
 	}
 }
 
@@ -94,7 +129,7 @@ type BuildOutputs struct {
 	Arch     string
 }
 
-func BuildProject(args utils.Args) {
+func BuildProject(args utils.Args) error {
 	fmt.Println("Building project...")
 	buildOutputs := []BuildOutputs{
 		{
@@ -147,17 +182,17 @@ func BuildProject(args utils.Args) {
 		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("build failed for %s/%s: %w", output.Platform, output.Arch, err)
 		}
 		fmt.Printf(" Done\n")
 	}
 	if !args.Release {
-		return
+		return nil
 	}
 	cmd := exec.Command("git", "show-ref", "--tags")
 	tagsStr, err := cmd.CombinedOutput()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to read git tags: %w", err)
 	}
 	tagFound := false
 	tags := strings.Split(string(tagsStr), "\n")
@@ -175,7 +210,7 @@ func BuildProject(args utils.Args) {
 		cmd.Stderr = os.Stderr
 		err := cmd.Run()
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("failed to create git tag %s: %w", Version, err)
 		}
 	} else {
 		fmt.Println("Git tag already exists")
@@ -185,7 +220,7 @@ func BuildProject(args utils.Args) {
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to push git tag %s: %w", Version, err)
 	}
 	cmd = exec.Command(
 		"gh", "release", "create", Version,
@@ -195,7 +230,7 @@ func BuildProject(args utils.Args) {
 	)
 	err = cmd.Run()
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to create GitHub release %s: %w", Version, err)
 	}
 	fmt.Printf("Cleanup...")
 	for i := range buildOutputs {
@@ -223,4 +258,5 @@ func BuildProject(args utils.Args) {
 		}
 	}
 	fmt.Printf(" Done\n")
+	return nil
 }

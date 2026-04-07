@@ -3,49 +3,59 @@ package utils
 import (
 	"fmt"
 	"os"
-	"runtime"
+	"path/filepath"
 	"strings"
 )
 
 type FS struct {
-	isWin    bool
-	Slash    string
 	BasePath string
-	baseLen  int
 }
 
 // @basePath If nil then use current working directory
 func NewFS(basePath *[]string) FS {
-	isWin := false
-	slash := "/"
-	if runtime.GOOS == "windows" {
-		isWin = true
-		slash = "\\"
-	}
 	bp, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
-	if basePath != nil {
-		bp = bp + strings.Join(*basePath, slash)
+	bp = filepath.Clean(bp)
+	if basePath != nil && len(*basePath) > 0 {
+		rel := filepath.Clean(filepath.Join((*basePath)...))
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			panic("input path escapes current working directory")
+		}
+		candidate := filepath.Join(bp, rel)
+		relCheck, err := filepath.Rel(bp, candidate)
+		if err != nil {
+			panic(err)
+		}
+		if relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(os.PathSeparator)) {
+			panic("input path escapes current working directory")
+		}
+		bp = candidate
 	}
 	fs := FS{
-		isWin:    isWin,
-		Slash:    slash,
 		BasePath: bp,
-		baseLen:  len(strings.Split(bp, slash)),
 	}
 	fmt.Println("PWD:", fs.Path())
-	fs.mkdirIfNotExists(fs.Path(), false)
+	fs.mkdirIfNotExists(fs.Path())
 	return fs
 }
 
 func (fs *FS) Path(path ...string) string {
-	return fs.BasePath + fs.Slash + strings.Join(path, fs.Slash)
+	parts := append([]string{fs.BasePath}, path...)
+	resolved := filepath.Clean(filepath.Join(parts...))
+	rel, err := filepath.Rel(fs.BasePath, resolved)
+	if err != nil {
+		panic(err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		panic("resolved path escapes base directory")
+	}
+	return resolved
 }
 
 func (fs *FS) ToPath(path string) []string {
-	parts := strings.Split(path, "/")
+	parts := strings.Split(filepath.ToSlash(path), "/")
 	relativePath := []string{}
 	for i := range parts {
 		part := parts[i]
@@ -73,28 +83,22 @@ func (fs *FS) Exists(path ...string) bool {
 	return true
 }
 
-func (fs *FS) mkdirIfNotExists(path string, skipRoot bool) {
-	parts := strings.Split(path, fs.Slash)
-	startAt := 0
-	if skipRoot {
-		startAt = fs.baseLen
-	}
-	for i := startAt; i < len(parts)-1; i++ {
-		part := parts[i]
-		if part == "" {
-			continue
-		}
-		path = strings.Join(parts[:i+1], fs.Slash)
-		if !dirExists(path) {
-			os.Mkdir(path, 0755)
-		}
+func (fs *FS) mkdirIfNotExists(path string) {
+	dir := filepath.Dir(path)
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		panic(err)
 	}
 }
 
 func (fs *FS) Write(data []byte, path ...string) Result[bool] {
+	return fs.WriteWithMode(data, 0644, path...)
+}
+
+func (fs *FS) WriteWithMode(data []byte, mode os.FileMode, path ...string) Result[bool] {
 	aPath := fs.Path(path...)
-	fs.mkdirIfNotExists(aPath, true)
-	err := os.WriteFile(aPath, data, 0644)
+	fs.mkdirIfNotExists(aPath)
+	err := os.WriteFile(aPath, data, mode.Perm())
 	if err != nil {
 		return Err[bool](err)
 	}
@@ -103,7 +107,7 @@ func (fs *FS) Write(data []byte, path ...string) Result[bool] {
 
 func (fs *FS) Append(data []byte, path ...string) Result[bool] {
 	aPath := fs.Path(path...)
-	fs.mkdirIfNotExists(aPath, true)
+	fs.mkdirIfNotExists(aPath)
 	f, err := os.OpenFile(aPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return Err[bool](err)
@@ -142,6 +146,14 @@ func (fs *FS) OpenFile(path ...string) Result[*os.File] {
 	return Ok(file)
 }
 
+func (fs *FS) FileMode(path ...string) Result[os.FileMode] {
+	fileInfo, err := os.Stat(fs.Path(path...))
+	if err != nil {
+		return Err[os.FileMode](err)
+	}
+	return Ok(fileInfo.Mode())
+}
+
 func (fs *FS) Delete(path ...string) Result[bool] {
 	aPath := fs.Path(path...)
 	err := os.Remove(aPath)
@@ -149,16 +161,6 @@ func (fs *FS) Delete(path ...string) Result[bool] {
 		return Err[bool](err)
 	}
 	return Ok(true)
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return info.IsDir()
 }
 
 func (fs *FS) ListFiles(path ...string) Result[[]string] {
@@ -178,13 +180,8 @@ func (fs *FS) ListFiles(path ...string) Result[[]string] {
 			}
 			files = append(files, childFiles.Value...)
 		} else {
-			pathJoined := strings.Join(path, "/")
-			if pathJoined == "" {
-				files = append(files, entry.Name())
-			} else {
-				pathJoined := strings.TrimPrefix(pathJoined, "/")
-				files = append(files, pathJoined+"/"+entry.Name())
-			}
+			file := filepath.ToSlash(filepath.Join(append(path, entry.Name())...))
+			files = append(files, file)
 		}
 	}
 	return Ok(files)

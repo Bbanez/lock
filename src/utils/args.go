@@ -2,6 +2,7 @@ package utils
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -28,7 +29,15 @@ func GetArgs() Args {
 		value := rawArgs[i]
 		switch value {
 		case "-i":
-			args.Input = strings.Split(rawArgs[i+1], "/")
+			clean := filepath.Clean(rawArgs[i+1])
+			if clean == "." {
+				args.Input = []string{}
+				break
+			}
+			if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+				panic("-i path cannot escape current working directory")
+			}
+			args.Input = strings.Split(filepath.ToSlash(clean), "/")
 		case "-p":
 			args.Pass = rawArgs[i+1]
 		case "-u":
