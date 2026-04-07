@@ -1,0 +1,8 @@
+dist
+node_modules
+lock_*
+/build
+.cache
+.DS_Store
+.obsidian
+/test
